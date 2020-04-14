@@ -76,9 +76,16 @@ def load_vgg_model(path):
         42 is softmax
     """
     
-    vgg = scipy.io.loadmat(path)
+    # vgg = scipy.io.loadmat(path)
 
-    vgg_layers = vgg['layers']
+    # vgg_layers = vgg['layers']
+
+    model = tf.keras.applications.VGG19(
+        include_top=False,
+        input_shape=(CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS),
+        pooling='avg')
+
+    vgg_layers = model.layers[1].weights
     
     def _weights(layer, expected_layer_name):
         """
@@ -91,7 +98,6 @@ def load_vgg_model(path):
         assert layer_name == expected_layer_name
         return W, b
 
-        return W, b
 
     def _relu(conv2d_layer):
         """
@@ -186,3 +192,15 @@ def save_image(path, image):
     # Clip and Save the image
     image = np.clip(image[0], 0, 255).astype('uint8')
     scipy.misc.imsave(path, image)
+
+
+if __name__ == "__main__":
+    # model = load_vgg_model('')
+
+    model = tf.keras.applications.VGG19(
+        include_top=False,
+        input_shape=(CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS),
+        pooling='avg')
+
+    weights, bias = model.layers[1].weights
+    print(weights)
