@@ -7,22 +7,22 @@ import scipy.misc
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import imshow
 from PIL import Image
-from nst_utils import *
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras import layers, Input, Model
 
 class CONFIG:
     IMAGE_WIDTH = 400
     IMAGE_HEIGHT = 300
     COLOR_CHANNELS = 3
     NOISE_RATIO = 0.6
-    MEANS = np.array([123.68, 116.779, 103.939]).reshape((1,1,1,3)) 
+    MEANS = np.array([123.68, 116.779, 103.939]).reshape((1,1,1,3))
     VGG_MODEL = 'pretrained-model/imagenet-vgg-verydeep-19.mat' # Pick the VGG 19-layer model by from the paper "Very Deep Convolutional Networks for Large-Scale Image Recognition".
     STYLE_IMAGE = 'images/stone_style.jpg' # Style image to use.
     CONTENT_IMAGE = 'images/content300.jpg' # Content image to use.
     OUTPUT_DIR = 'output/'
-    
+
 def load_vgg_model(path):
     """
     Returns a model for the purpose of 'painting' the picture.
@@ -34,7 +34,7 @@ def load_vgg_model(path):
         0 is conv1_1 (3, 3, 3, 64)
         1 is relu
         2 is conv1_2 (3, 3, 64, 64)
-        3 is relu    
+        3 is relu
         4 is maxpool
         5 is conv2_1 (3, 3, 64, 128)
         6 is relu
@@ -75,18 +75,11 @@ def load_vgg_model(path):
         41 is fullyconnected (1, 1, 4096, 1000)
         42 is softmax
     """
-    
-    # vgg = scipy.io.loadmat(path)
 
-    # vgg_layers = vgg['layers']
+    vgg = scipy.io.loadmat(path)
 
-    model = tf.keras.applications.VGG19(
-        include_top=False,
-        input_shape=(CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS),
-        pooling='avg')
+    vgg_layers = vgg['layers']
 
-    vgg_layers = model.layers[1].weights
-    
     def _weights(layer, expected_layer_name):
         """
         Return the weights and bias from the VGG model for a given layer.
@@ -97,7 +90,6 @@ def load_vgg_model(path):
         layer_name = vgg_layers[0][layer][0][0][0][0]
         assert layer_name == expected_layer_name
         return W, b
-
 
     def _relu(conv2d_layer):
         """
@@ -153,20 +145,77 @@ def load_vgg_model(path):
     graph['conv5_3']  = _conv2d_relu(graph['conv5_2'], 32, 'conv5_3')
     graph['conv5_4']  = _conv2d_relu(graph['conv5_3'], 34, 'conv5_4')
     graph['avgpool5'] = _avgpool(graph['conv5_4'])
-    
+
     return graph
+
+
+def load_vgg_model_WJL(path):
+    model = tf.keras.applications.VGG19(
+        include_top=False,
+        weights=None,
+        input_shape=(CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS),
+        pooling='avg'
+    )
+    model.load_weights(path)
+
+    def _weights(layer):
+        weights, bias = model.layers[layer].weights
+        return weights, bias
+
+    def _relu(conv2d_layer):
+        return tf.nn.relu(conv2d_layer)
+
+    def _conv2d(prev_layer, layer):
+        W, b = _weights(layer)
+        return tf.nn.conv2d(prev_layer, filters=W, strides=[1, 1, 1, 1], padding='SAME') + b
+
+    def _conv2d_relu(prev_layer, layer):
+        return _relu(_conv2d(prev_layer, layer))
+
+    def _maxpool(prev_layer):
+        return tf.nn.max_pool(prev_layer, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+
+    def get_graph(inputs):
+        graph = {}
+        # graph['input']   = tf.Variable(np.zeros((pic_num, CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS)), dtype =tf.float32)
+        graph['input']   = inputs
+        graph['conv1_1']  = _conv2d_relu(graph['input'], 1)
+        graph['conv1_2']  = _conv2d_relu(graph['conv1_1'], 2)
+        graph['maxpool1'] = _maxpool(graph['conv1_2'])
+        graph['conv2_1']  = _conv2d_relu(graph['maxpool1'], 4)
+        graph['conv2_2']  = _conv2d_relu(graph['conv2_1'], 5)
+        graph['maxpool2'] = _maxpool(graph['conv2_2'])
+        graph['conv3_1']  = _conv2d_relu(graph['maxpool2'], 7)
+        graph['conv3_2']  = _conv2d_relu(graph['conv3_1'], 8)
+        graph['conv3_3']  = _conv2d_relu(graph['conv3_2'], 9)
+        graph['conv3_4']  = _conv2d_relu(graph['conv3_3'], 10)
+        graph['maxpool3'] = _maxpool(graph['conv3_4'])
+        graph['conv4_1']  = _conv2d_relu(graph['maxpool3'], 12)
+        graph['conv4_2']  = _conv2d_relu(graph['conv4_1'], 13)
+        graph['conv4_3']  = _conv2d_relu(graph['conv4_2'], 14)
+        graph['conv4_4']  = _conv2d_relu(graph['conv4_3'], 15)
+        graph['maxpool4'] = _maxpool(graph['conv4_4'])
+        graph['conv5_1']  = _conv2d_relu(graph['maxpool4'], 17)
+        graph['conv5_2']  = _conv2d_relu(graph['conv5_1'], 18)
+        graph['conv5_3']  = _conv2d_relu(graph['conv5_2'], 19)
+        graph['conv5_4']  = _conv2d_relu(graph['conv5_3'], 20)
+        graph['maxpool5'] = _maxpool(graph['conv5_4'])
+
+        return graph
+
+    return get_graph
 
 def generate_noise_image(content_image, noise_ratio = CONFIG.NOISE_RATIO):
     """
     Generates a noisy image by adding random noise to the content_image
     """
-    
+
     # Generate a random noise_image
     noise_image = np.random.uniform(-20, 20, (1, CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS)).astype('float32')
-    
+
     # Set the input_image to be a weighted average of the content_image and a noise_image
     input_image = noise_image * noise_ratio + content_image * (1 - noise_ratio)
-    
+
     return input_image
 
 
@@ -174,33 +223,40 @@ def reshape_and_normalize_image(image):
     """
     Reshape and normalize the input image (content or style)
     """
-    
+
     # Reshape image to mach expected input of VGG16
     image = np.reshape(image, ((1,) + image.shape))
-    
+
     # Substract the mean to match the expected input of VGG16
     image = image - CONFIG.MEANS
-    
+
     return image
 
 
 def save_image(path, image):
-    
+
     # Un-normalize the image so that it looks good
     image = image + CONFIG.MEANS
-    
+
     # Clip and Save the image
     image = np.clip(image[0], 0, 255).astype('uint8')
-    scipy.misc.imsave(path, image)
+    plt.imsave(path, image)
 
 
 if __name__ == "__main__":
-    # model = load_vgg_model('')
+    get_model = load_vgg_model_WJL(r'D:\workspace\AiLearning\Coursera-Deep-Learning-deeplearning.ai-master\04-Convolutional Neural Networks\week4\Neural Style Transfer\vgg19_nontop.chkpt')
+    a = tf.random.normal([1, 2, 2, 3])
+    b = tf.random.normal([1, 2, 2, 3])
+    print(np.all((a == b).numpy()))
+    # model1['input'] = a
+    # d1 = model1['conv1_2']
 
-    model = tf.keras.applications.VGG19(
-        include_top=False,
-        input_shape=(CONFIG.IMAGE_HEIGHT, CONFIG.IMAGE_WIDTH, CONFIG.COLOR_CHANNELS),
-        pooling='avg')
+    # model2['input'] = b
+    c = tf.concat([a, b], axis=0)
+    print(c)
+    model1 = get_model(c)
+    res = model1['conv1_1']
+    print(res)
+    a, b = tf.split(res, 2, axis=0)
+    print(np.all((a == b).numpy()))
 
-    weights, bias = model.layers[1].weights
-    print(weights)
